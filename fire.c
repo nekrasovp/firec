@@ -10,6 +10,8 @@
 #include <sys/ioctl.h>
 
 #include "fireplace_frames.h"
+#include "temperature.h"
+#include "ui.h"
 
 static const char ASCII_RAMP[] = " .,:;irsXA253hMHGS#9B&@";
 static volatile sig_atomic_t keep_running = 1;
@@ -62,7 +64,7 @@ static int read_cpu_sample(CpuSample *sample) {
     return 1;
 }
 
-static int read_memory(double *used_gib, double *total_gib, double *used_percent) {
+static int read_memory(double *used_percent) {
     FILE *meminfo = fopen("/proc/meminfo", "r");
     if (meminfo == NULL) {
         return 0;
@@ -87,30 +89,17 @@ static int read_memory(double *used_gib, double *total_gib, double *used_percent
     }
 
     unsigned long long used_kib = total_kib - available_kib;
-    *used_gib = used_kib / 1048576.0;
-    *total_gib = total_kib / 1048576.0;
     *used_percent = 100.0 * used_kib / total_kib;
     return 1;
-}
-
-static void make_bar(char *bar, int length, double percent) {
-    int filled = (int)(percent * length / 100.0 + 0.5);
-    if (filled < 0) filled = 0;
-    if (filled > length) filled = length;
-
-    for (int i = 0; i < length; i++) {
-        bar[i] = (i < filled) ? '#' : '-';
-    }
-    bar[length] = '\0';
 }
 
 static void draw_status_line(
     int row,
     int width,
     double cpu_percent,
-    double memory_used_gib,
-    double memory_total_gib,
-    double memory_percent
+    double memory_percent,
+    int temperature_available,
+    double temperature_celsius
 ) {
     char status[256];
     char current_time[9] = "--:--:--";
@@ -121,53 +110,16 @@ static void draw_status_line(
         strftime(current_time, sizeof(current_time), "%H:%M:%S", &local_time);
     }
 
-    if (width >= 96) {
-        char cpu_bar[11];
-        char memory_bar[11];
-        make_bar(cpu_bar, 10, cpu_percent);
-        make_bar(memory_bar, 10, memory_percent);
-        snprintf(
-            status,
-            sizeof(status),
-            " CPU [%s] %5.1f%% | RAM [%s] %.1f/%.1f GiB (%5.1f%%) | TIME %s ",
-            cpu_bar,
-            cpu_percent,
-            memory_bar,
-            memory_used_gib,
-            memory_total_gib,
-            memory_percent,
-            current_time
-        );
-    } else if (width >= 60) {
-        snprintf(
-            status,
-            sizeof(status),
-            " CPU %5.1f%% | RAM %.1f/%.1f GiB (%5.1f%%) | %s ",
-            cpu_percent,
-            memory_used_gib,
-            memory_total_gib,
-            memory_percent,
-            current_time
-        );
-    } else if (width >= 36) {
-        snprintf(
-            status,
-            sizeof(status),
-            " CPU %.0f%% | RAM %.0f%% | %s ",
-            cpu_percent,
-            memory_percent,
-            current_time
-        );
-    } else {
-        snprintf(
-            status,
-            sizeof(status),
-            " C%.0f%% M%.0f%% %.5s ",
-            cpu_percent,
-            memory_percent,
-            current_time
-        );
-    }
+    format_status_line(
+        status,
+        sizeof(status),
+        width,
+        cpu_percent,
+        memory_percent,
+        temperature_available,
+        temperature_celsius,
+        current_time
+    );
 
     int status_length = (int)strlen(status);
     printf("\033[%d;1H\033[48;5;235m\033[38;5;231m", row);
@@ -189,13 +141,23 @@ static void draw_status_line(
     printf("\033[0m");
 }
 
+static int apply_gain(int value, int gain) {
+    value = value * gain / 256;
+    return value > 255 ? 255 : value;
+}
+
 static void packed_rgb(unsigned char color, int *red, int *green, int *blue) {
     *red = ((color >> 4) & 15) * 17;
     *green = ((color >> 1) & 7) * 255 / 7;
     *blue = (color & 1) * 255;
 }
 
-static void draw_fireplace_frame(unsigned int frame, int width, int height) {
+static void draw_fireplace_frame(
+    unsigned int frame,
+    int width,
+    int height,
+    const FireStyle *style
+) {
     int crop_x = 0;
     int crop_y = 0;
     int crop_width = FIREPLACE_FRAME_WIDTH;
@@ -247,10 +209,16 @@ static void draw_fireplace_frame(unsigned int frame, int width, int height) {
             int green;
             int blue;
             packed_rgb(color, &red, &green, &blue);
+            int scene_red = apply_gain(red, style->scene_red_gain);
+            int scene_green = apply_gain(green, style->scene_green_gain);
+            int scene_blue = apply_gain(blue, style->scene_blue_gain);
+            int flame_red = apply_gain(red, style->flame_red_gain);
+            int flame_green = apply_gain(green, style->flame_green_gain);
+            int flame_blue = apply_gain(blue, style->flame_blue_gain);
 
             // Keep bright flames visible at every height while the masonry
             // smoothly fades from its full lower-screen color to black above.
-            int fire_score = red + 2 * green;
+            int fire_score = flame_red + 2 * flame_green;
             int fire_visibility = (fire_score - 190) * 255 / 150;
             if (fire_visibility < 0) fire_visibility = 0;
             if (fire_visibility > 255) fire_visibility = 255;
@@ -259,12 +227,21 @@ static void draw_fireplace_frame(unsigned int frame, int width, int height) {
                 foreground_visibility = fire_visibility;
             }
 
-            int display_red = red * foreground_visibility / 255;
-            int display_green = green * foreground_visibility / 255;
-            int display_blue = blue * foreground_visibility / 255;
-            int background_red = red * background_visibility * 2 / (255 * 5);
-            int background_green = green * background_visibility * 2 / (255 * 5);
-            int background_blue = blue * background_visibility * 2 / (255 * 5);
+            int mixed_red = (
+                scene_red * (255 - fire_visibility) + flame_red * fire_visibility
+            ) / 255;
+            int mixed_green = (
+                scene_green * (255 - fire_visibility) + flame_green * fire_visibility
+            ) / 255;
+            int mixed_blue = (
+                scene_blue * (255 - fire_visibility) + flame_blue * fire_visibility
+            ) / 255;
+            int display_red = mixed_red * foreground_visibility / 255;
+            int display_green = mixed_green * foreground_visibility / 255;
+            int display_blue = mixed_blue * foreground_visibility / 255;
+            int background_red = scene_red * background_visibility * 2 / (255 * 5);
+            int background_green = scene_green * background_visibility * 2 / (255 * 5);
+            int background_blue = scene_blue * background_visibility * 2 / (255 * 5);
 
             int luminance =
                 (299 * display_red + 587 * display_green + 114 * display_blue) / 1000;
@@ -308,16 +285,24 @@ int main(void) {
 
     CpuSample previous_cpu = {0};
     double cpu_percent = 0.0;
-    double memory_used_gib = 0.0;
-    double memory_total_gib = 0.0;
     double memory_percent = 0.0;
+    TemperatureSource temperature_source;
+    double temperature_celsius = 0.0;
+    int temperature_available = 0;
+    unsigned int temperature_failures = 0;
     unsigned int frame = 0;
     unsigned int stats_frame = 0;
     int previous_width = 0;
     int previous_height = 0;
 
     read_cpu_sample(&previous_cpu);
-    read_memory(&memory_used_gib, &memory_total_gib, &memory_percent);
+    read_memory(&memory_percent);
+    if (temperature_source_discover(&temperature_source, "/sys/class/hwmon")) {
+        temperature_available = temperature_source_read(
+            &temperature_source,
+            &temperature_celsius
+        );
+    }
     printf("\033[?25l\033[2J");
 
     while (keep_running) {
@@ -336,7 +321,12 @@ int main(void) {
             previous_height = height;
         }
 
-        draw_fireplace_frame(frame, width, fireplace_height);
+        FireStyle fire_style = fire_style_from_temperature(
+            temperature_available,
+            temperature_celsius,
+            temperature_source.critical_celsius
+        );
+        draw_fireplace_frame(frame, width, fireplace_height, &fire_style);
         frame = (frame + 1) % FIREPLACE_FRAME_COUNT;
 
         if (++stats_frame % (FIREPLACE_FRAME_RATE / 2) == 0) {
@@ -349,16 +339,40 @@ int main(void) {
                 }
                 previous_cpu = current_cpu;
             }
-            read_memory(&memory_used_gib, &memory_total_gib, &memory_percent);
+            read_memory(&memory_percent);
+
+            double current_temperature = 0.0;
+            if (temperature_source_read(&temperature_source, &current_temperature)) {
+                if (temperature_available) {
+                    temperature_celsius = temperature_celsius * 0.75
+                        + current_temperature * 0.25;
+                } else {
+                    temperature_celsius = current_temperature;
+                }
+                temperature_available = 1;
+                temperature_failures = 0;
+            } else {
+                temperature_failures++;
+                if (temperature_failures >= 3) {
+                    temperature_available = 0;
+                }
+                if (temperature_failures >= 60) {
+                    (void)temperature_source_discover(
+                        &temperature_source,
+                        "/sys/class/hwmon"
+                    );
+                    temperature_failures = 0;
+                }
+            }
         }
 
         draw_status_line(
             height,
             width,
             cpu_percent,
-            memory_used_gib,
-            memory_total_gib,
-            memory_percent
+            memory_percent,
+            temperature_available,
+            temperature_celsius
         );
         fflush(stdout);
 

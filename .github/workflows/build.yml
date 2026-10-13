@@ -8,11 +8,36 @@ permissions:
   contents: read
 
 jobs:
-  gcc:
+  build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+    env:
+      CC: ${{ matrix.compiler }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Build with warnings enabled
         run: make
+
+      - name: Run tests
+        run: make test
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    env:
+      CFLAGS: >-
+        -O1 -g -std=c11 -Wall -Wextra -Wpedantic
+        -fsanitize=address,undefined -fno-omit-frame-pointer
+      LDFLAGS: -fsanitize=address,undefined
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build with sanitizers
+        run: make
+
+      - name: Run tests with sanitizers
+        run: make test
