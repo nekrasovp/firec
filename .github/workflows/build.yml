@@ -41,3 +41,21 @@ jobs:
 
       - name: Run tests with sanitizers
         run: make test
+
+  omz-fireplace:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Zsh
+        run: sudo apt-get update && sudo apt-get install --yes zsh
+
+      - name: Show Zsh version
+        run: zsh --version
+
+      - name: Validate Oh My Zsh fireplace adapter
+        run: make test-omz

@@ -32,6 +32,17 @@ make
 
 Press `Ctrl+C` to stop. The scene automatically adapts to terminal resizing.
 
+To run the same fireplace as a terminal screensaver, without monitoring:
+
+```sh
+./fire --shellsaver
+./fire --shellsaver --seconds 30
+```
+
+Shellsaver mode uses the full terminal, exits on any key, and reads no CPU,
+RAM, temperature, or clock data. It owns and restores the alternate screen,
+cursor state, and terminal input mode.
+
 You can also build it directly:
 
 ```sh
@@ -73,6 +84,25 @@ To regenerate the README animation, install Pillow and run:
 
 ```sh
 make preview
+```
+
+## Oh My Zsh Shellsaver adapter
+
+An experimental community adapter lives in
+[`contrib/oh-my-zsh`](contrib/oh-my-zsh). It is intentionally a thin launcher,
+not a Zsh reimplementation: it executes `fire --shellsaver`, preserving the
+same embedded frames, renderer, proportions, colors, and timing as the C app.
+
+This requires the `firec` project executable (`fire` in this repository). The
+launcher adds no rendering dependency and the shellsaver path adds no
+monitoring dependency.
+
+![Animated Oh My Zsh fireplace preview](assets/omz-fireplace.gif)
+
+Validate the adapter and terminal lifecycle with:
+
+```sh
+make test-omz
 ```
 
 ## Credits and licenses

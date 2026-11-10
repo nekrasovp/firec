@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Capture firec in a pseudo-terminal and render the output as an animated GIF."""
+"""Capture a terminal program and render its output as an animated GIF."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def xterm_color(index: int) -> tuple[int, int, int]:
 
 
 class Terminal:
-    """Small ANSI parser covering the cursor and color sequences firec emits."""
+    """Small ANSI parser covering the cursor and color sequences used here."""
 
     def __init__(self, columns: int, rows: int) -> None:
         self.columns = columns
@@ -117,6 +117,11 @@ class Terminal:
             self.clear()
             self.row = 0
             self.column = 0
+        elif command == ord("K"):
+            for column in range(self.column, self.columns):
+                self.characters[self.row][column] = " "
+                self.foreground[self.row][column] = self.current_foreground
+                self.background[self.row][column] = self.current_background
         elif command == ord("m"):
             self.apply_sgr(values)
 
@@ -129,6 +134,11 @@ class Terminal:
                 if position + 1 >= len(self.pending):
                     break
                 if self.pending[position + 1] != ord("["):
+                    if self.pending[position + 1] in (ord("("), ord(")")):
+                        if position + 2 >= len(self.pending):
+                            break
+                        position += 3
+                        continue
                     position += 2
                     continue
                 end = position + 2
@@ -141,6 +151,10 @@ class Terminal:
                 self.apply_control(bytes(self.pending[position + 2 : end]), self.pending[end])
                 position = end + 1
                 continue
+            if byte == 0x0D:
+                self.column = 0
+            elif byte == 0x0A:
+                self.row = min(self.row + 1, self.rows - 1)
             if 0x20 <= byte <= 0x7E and self.row < self.rows and self.column < self.columns:
                 self.characters[self.row][self.column] = chr(byte)
                 self.foreground[self.row][self.column] = self.current_foreground
@@ -199,6 +213,7 @@ def render_terminal(
 
 def capture(
     executable: Path,
+    arguments: list[str],
     destination: Path,
     columns: int,
     rows: int,
@@ -215,12 +230,16 @@ def capture(
 
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
+    environment = os.environ.copy()
+    if environment.get("TERM") in (None, "", "dumb"):
+        environment["TERM"] = "xterm-256color"
     process = subprocess.Popen(
-        [str(executable.resolve())],
-        stdin=subprocess.DEVNULL,
+        [str(executable.resolve()), *arguments],
+        stdin=slave,
         stdout=slave,
         stderr=slave,
         close_fds=True,
+        env=environment,
         start_new_session=True,
     )
     os.close(slave)
@@ -246,7 +265,7 @@ def capture(
                 )
                 next_frame += interval
             if process.poll() is not None:
-                raise RuntimeError("firec exited before the capture completed")
+                raise RuntimeError("terminal program exited before the capture completed")
     finally:
         if process.poll() is None:
             os.killpg(process.pid, signal.SIGINT)
@@ -290,10 +309,17 @@ def main() -> None:
     parser.add_argument("--frame-rate", type=int, default=10)
     parser.add_argument("--font", type=Path, default=DEFAULT_FONT)
     parser.add_argument("--font-size", type=int, default=12)
+    parser.add_argument(
+        "--argument",
+        action="append",
+        default=[],
+        help="argument passed to the terminal program; repeat as needed",
+    )
     args = parser.parse_args()
 
     capture(
         args.executable,
+        args.argument,
         args.destination,
         args.columns,
         args.rows,
