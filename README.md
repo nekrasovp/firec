@@ -1,6 +1,7 @@
 # firec
 
-A cozy, full-screen ASCII fireplace for Linux terminals, written in C.
+A cozy, full-screen ASCII fireplace with Linux monitoring and a portable
+shellsaver mode, written in C.
 
 ![Animated firec terminal preview](assets/fireplace.gif)
 
@@ -18,8 +19,9 @@ simply omit temperature from the status line.
 
 ## Requirements
 
-- Linux with `/proc/stat` and `/proc/meminfo`
-- Optional CPU temperature through `/sys/class/hwmon`
+- Linux with `/proc/stat` and `/proc/meminfo` for monitoring mode
+- Optional CPU temperature through Linux `/sys/class/hwmon`
+- Linux or macOS for monitoring-free shellsaver mode
 - A terminal with 24-bit color support
 - A C11 compiler and `make`
 
@@ -66,6 +68,21 @@ temporarily disappears.
 ```sh
 make test
 ```
+
+CI validates the shellsaver lifecycle on Linux and macOS x86_64/arm64. The
+monitoring mode remains Linux-specific.
+
+## Release packaging
+
+Build a deterministic archive containing the executable, Oh My Zsh launcher,
+README files, MIT license, and the required CC BY 3.0 frame provenance:
+
+```sh
+make dist VERSION=v0.3.0 PLATFORM=linux-x86_64
+```
+
+The archive preserves the executable bit and is accompanied by a `.sha256`
+file. Tagged releases build Linux and macOS archives for x86_64 and arm64.
 
 ## Regenerating the embedded frames
 
