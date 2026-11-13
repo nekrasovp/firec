@@ -1,6 +1,7 @@
 /fire
 /tests/test_temperature
 /tests/test_ui
+/dist/
 /*.webm
 /*.mp4
 __pycache__/
