@@ -38,19 +38,24 @@ jobs:
           - os: ubuntu-22.04
             compiler: gcc
             platform: linux-x86_64
+            macos_deployment_target: ""
           - os: ubuntu-22.04-arm
             compiler: gcc
             platform: linux-aarch64
+            macos_deployment_target: ""
           - os: macos-15-intel
             compiler: clang
             platform: macos-x86_64
+            macos_deployment_target: "11.0"
           - os: macos-15
             compiler: clang
             platform: macos-arm64
+            macos_deployment_target: "11.0"
     runs-on: ${{ matrix.os }}
     env:
       CC: ${{ matrix.compiler }}
       CFLAGS: -O2 -std=c11 -Wall -Wextra -Wpedantic -Werror
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.macos_deployment_target }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -74,6 +79,27 @@ jobs:
 
       - name: Build with warnings as errors
         run: make
+
+      - name: Verify macOS deployment target
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_target=$(
+            otool -l ./fire |
+              awk '
+                $1 == "cmd" && $2 == "LC_BUILD_VERSION" {
+                  in_build_version = 1
+                  next
+                }
+                in_build_version && $1 == "minos" {
+                  print $2
+                  exit
+                }
+              '
+          )
+          printf 'macOS deployment target: %s\n' "$actual_target"
+          test "$actual_target" = "$MACOSX_DEPLOYMENT_TARGET"
 
       - name: Run portable and PTY tests
         run: make test

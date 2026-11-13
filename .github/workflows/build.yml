@@ -69,6 +69,7 @@ jobs:
     env:
       CC: clang
       CFLAGS: -O2 -std=c11 -Wall -Wextra -Wpedantic -Werror
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,6 +82,26 @@ jobs:
 
       - name: Build with warnings as errors
         run: make
+
+      - name: Verify macOS deployment target
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_target=$(
+            otool -l ./fire |
+              awk '
+                $1 == "cmd" && $2 == "LC_BUILD_VERSION" {
+                  in_build_version = 1
+                  next
+                }
+                in_build_version && $1 == "minos" {
+                  print $2
+                  exit
+                }
+              '
+          )
+          printf 'macOS deployment target: %s\n' "$actual_target"
+          test "$actual_target" = "$MACOSX_DEPLOYMENT_TARGET"
 
       - name: Run portable and PTY tests
         run: make test
